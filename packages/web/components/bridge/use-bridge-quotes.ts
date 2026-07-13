@@ -23,6 +23,7 @@ import { BaseError } from "wagmi";
 import { displayToast } from "~/components/alert/toast";
 import { ToastType } from "~/components/alert/types";
 import {
+  deriveMemoFlags,
   LossFigures,
   needsAcknowledgement,
 } from "~/components/bridge/loss-acknowledgement";
@@ -678,6 +679,12 @@ export const useBridgeQuotes = ({
   }, [isTxPending, onRequestClose, transferInitiated]);
 
   const [isApprovingToken, setIsApprovingToken] = useState(false);
+  /**
+   * EVM transactions carry no auth-memo field (`EvmBridgeTransactionRequest`
+   * is only to/data/value/gas), so the warn-accept memo stamp (MTN-137)
+   * cannot be recorded on this path. The acknowledgement gate itself still
+   * applies — only the on-chain forensic proof is unavailable.
+   */
   const signAndBroadcastEvmTx = async (
     quote: NonNullable<typeof selectedQuote>["quote"]
   ) => {
@@ -785,6 +792,11 @@ export const useBridgeQuotes = ({
     const gasFee = transactionRequest.gasFee;
     let nomicCheckpointIndex: number | undefined;
 
+    // Warn-accept flags for the tx auth memo (MTN-137), stamped from the
+    // frozen acknowledged basis — the sign-time guard in `onTransfer` has
+    // already ensured the basis is fresh for the quote being signed.
+    const memoFlags = deriveMemoFlags(acknowledgedBasis);
+
     return accountStore.signAndBroadcast(
       fromChain.chainId,
       `${fromChain.chainId}:${fromAsset?.denom} -> ${toChain?.chainId}:${toAsset?.denom}`,
@@ -806,6 +818,9 @@ export const useBridgeQuotes = ({
         : undefined,
       {
         preferNoSetFee: Boolean(gasFee),
+        // On the amino path the wallet-returned memo is what gets encoded —
+        // don't let wallets offer to edit/drop the warn-accept proof.
+        ...(memoFlags && { preferNoSetMemo: true }),
       },
       {
         /**
@@ -858,7 +873,8 @@ export const useBridgeQuotes = ({
             setIsBroadcastingTx(false);
           }
         },
-      }
+      },
+      memoFlags
     );
   };
 
